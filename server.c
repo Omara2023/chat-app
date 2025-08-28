@@ -23,12 +23,11 @@ void init_hint(struct addrinfo *hints) {
     memset(hints, 0, sizeof(*hints));
     hints->ai_family = AF_UNSPEC; //allow IPv4 or IPv6
     hints->ai_socktype = SOCK_STREAM;
-    hints->ai_flags = AI_PASSIVE; //use my IP
+    hints->ai_flags = AI_PASSIVE; //    use my IP
 }
 
 int main(int argc, char** argv) {
     struct addrinfo hints, *serverInfo, *p;
-
     
     init_hint(&hints);
     int rv, sockfd;
