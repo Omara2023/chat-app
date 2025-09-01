@@ -12,7 +12,7 @@
 
 #define PORT "9034"
 #define BACKLOG 10
-#define INITIAL_ROOM_SIZE 4
+#define INITIAL_ROOM_SIZE 5
 #define MAX_DATA_SIZE 256
 
 /*
@@ -117,61 +117,111 @@ void del_from_pfds(struct pollfd pfds[], int i, int *fd_count) {
     *fd_count--;
 }
 
-void handle_incoming_connections(int sockfd, struct pollfd pfds[], int *fd_count, int *fd_size) {
-    struct sockaddr_storage theirAddr;
-    socklen_t sin_size;
-    char buffer[INET6_ADDRSTRLEN];
-    int newfd = accept(sockfd, (struct sockaddr *) &theirAddr, &sin_size);
+/*
+ * Handle incoming connections. 
+ */
+void handle_new_connection(int listener, struct pollfd **pfds, int *fd_count, int *fd_size) {
+    struct sockaddr_storage remoteAddr;
+    socklen_t addrlen;
+    int newfd;
+    char remoteIP[INET6_ADDRSTRLEN];
+    
+    addrlen = sizeof(remoteAddr);
+    newfd = accept(listener, (struct sockaddr *) &remoteAddr, &addrlen);
 
-    if (newfd < 0) {
+    if (newfd == -1) {
         perror("server: accept");
-        return;
-    }
-
-    add_to_pfds(&pfds, newfd, fd_count, fd_size);
-    printf("server: connection from %s\n", inet_ntop2(&theirAddr, buffer, sizeof(buffer)));
-}
-
-void broadcast_chat_message(struct pollfd pfds[], int fd_count, int sender_fd, char *msg) {
-    for (int i = 0; i < fd_count; i++) {
-        struct pollfd pfd = pfds[i];
-        if (pfd.fd == sender_fd) {
-            continue;
-        }
-        if (send(pfd.fd, msg, strlen(msg), 0) == -1) {
-            fprintf(stderr, "server: send");
-        }
+    } else {
+        add_to_pfds(pfds, newfd, fd_count, fd_size);
+        printf("pollserver: new connection from %s on socket %d\n", inet_ntop2(&remoteAddr, remoteIP, sizeof(remoteIP)), newfd);
     }
 }
 
-int main(void) {
-    int sockfd = get_listener_socket();
-    int fd_count = 0, fd_size = INITIAL_ROOM_SIZE, numEvents = 0;
-    struct pollfd* pfds = (struct pollfd *) malloc(sizeof(struct pollfd) * fd_size);
+/*
+ * Handle regular client data or client hangups.
+ */
+void handle_client_data(int listener, int *fd_count, struct pollfd *pfds, int *pfd_i) {
     char buffer[MAX_DATA_SIZE];
-    ssize_t received;
+    int sender_fd = pfds[*pfd_i].fd;
 
-    printf("server is listening for connections on port %s\n", PORT);
+    int nbytes = recv(sender_fd, buffer, sizeof(buffer), 0);
 
-    while(1) {
-        handle_incoming_connections(sockfd, pfds, fd_count, fd_size);
-        numEvents = poll(pfds, fd_count, 1000);
+    if (nbytes <= 0) {
+        if (nbytes == 0) {
+            //Connection closed.
+            printf("pollserver: socket %d hung up\n", sender_fd);
+        } else {
+            perror("pollserver: recv");
+        }
 
-        if (numEvents > 0) {
-            for (int i = 0; i < fd_count; i++) {
-                int to_read = pfds[i].revents & POLLIN;
-                int fd = pfds[i].fd;
+        close(sender_fd);
+        del_from_pfds(pfds, *pfd_i, fd_count);
 
-                if (to_read) {
-                    received = recv(fd, buffer, MAX_DATA_SIZE - 1, 0);
-                    if (read == -1) {
-                        fprintf(stderr, "server: read");
-                    } else {
-                        buffer[received] = '\0';
-                        broadcast_chat_message(pfds, fd_count, fd, buffer);    
-                    }
+        (*pfd_i)--; //Reexamine slot we just deleted from.
+    } else {
+        printf("pollserver: recv from fd %d: %.*s", sender_fd, nbytes, buffer);
+
+        //Send to everyone:
+        for (int j = 0; j < fd_count; j++) {
+            int dest_fd = pfds[j].fd;
+
+            if (dest_fd != listener && dest_fd != sender_fd) {
+                if (send(dest_fd, buffer, nbytes, 0) == -1) {
+                    fprintf(stderr, "server: send");
                 }
             }
         }
     }
+}
+
+/*
+ * Process all existing connections.
+ */
+void process_connections(int listener, int *fd_count, int *fd_size, struct pollfd **pfds) {
+    for (int i = 0; i < fd_count; i++) {
+        if ((*pfds)[i].revents & (POLLIN | POLLHUP)) {
+            if ((*pfds)[i].fd == listener) {
+                handle_new_connection(listener, pfds, fd_count, fd_size);
+            } else {
+                handle_client_data(listener, fd_count, pfds, &i);
+            }
+        }
+    }
+}
+
+/*
+ * Main: create a listener and connection set, loop forever processing connections.
+ */
+int main(void) {
+    int listener;
+    int fd_count = 0; 
+    int fd_size = INITIAL_ROOM_SIZE; 
+    struct pollfd* pfds = (struct pollfd *) malloc(sizeof(struct pollfd) * fd_size);
+    
+    listener = get_listener_socket();
+
+    if (listener == -1) {
+        fprintf(stderr, "error getting listening socket.");
+        exit(1);
+    }
+
+    pfds[0].fd = listener;
+    pfds[0].events = POLLIN;
+
+    fd_count = 1;
+
+    puts("pollserver: waiting for connections...");
+
+    while(1) {
+        int poll_count = poll(pfds, fd_count, -1);
+
+        if (poll_count == -1) {
+            perror("pollserver: poll");
+            exit(1);
+        }
+        
+        process_connections(listener, &fd_count, &fd_size, &pfds);
+    }
+
+    free(pfds);
 }
