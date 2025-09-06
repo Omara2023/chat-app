@@ -142,12 +142,15 @@ void handle_new_connection(int listener, struct pollfd **pfds, int *fd_count, in
  */
 void handle_client_data(int listener, int *fd_count, struct pollfd *pfds, int *pfd_i) {
     char buffer[MAX_DATA_SIZE];
+    uint32_t nbytes, to_receive;
     int sender_fd = pfds[*pfd_i].fd;
 
-    int nbytes = recv(sender_fd, buffer, sizeof(buffer), 0);
+    if ((nbytes = recv(sender_fd, &to_receive, sizeof(to_receive), 0)) != sizeof(to_receive)) {
+        perror("pollserver: recv");
+    }
 
-    if (nbytes <= 0) {
-        if (nbytes == 0) {
+    if (to_receive <= 0) {
+        if (to_receive == 0) {
             //Connection closed.
             printf("pollserver: socket %d hung up\n", sender_fd);
         } else {
@@ -159,6 +162,12 @@ void handle_client_data(int listener, int *fd_count, struct pollfd *pfds, int *p
 
         (*pfd_i)--; //Reexamine slot we just deleted from.
     } else {
+        nbytes = 0;
+
+        while (nbytes < to_receive) {
+            nbytes += recv(sender_fd, buffer + nbytes, sizeof(buffer) - nbytes, 0);
+        }
+
         printf("pollserver: recv from fd %d: %.*s", sender_fd, nbytes, buffer);
 
         //Send to everyone:
@@ -166,6 +175,10 @@ void handle_client_data(int listener, int *fd_count, struct pollfd *pfds, int *p
             int dest_fd = pfds[j].fd;
 
             if (dest_fd != listener && dest_fd != sender_fd) {
+                if (send(dest_fd, &nbytes, sizeof(nbytes), 0) == -1) {
+                    fprintf(stderr, "server: send");
+                }
+
                 if (send(dest_fd, buffer, nbytes, 0) == -1) {
                     fprintf(stderr, "server: send");
                 }
