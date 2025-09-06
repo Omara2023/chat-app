@@ -60,7 +60,7 @@ int get_server_socket() {
 void handle_event(int server_socket, struct pollfd *pfds, int i) {
     int offending_fd = pfds[i].fd;
     char buffer[MAX_MESSAGE_SIZE];
-    uint32_t nbytes;
+    uint32_t nbytes, to_receive;
 
     if (offending_fd == STDIN_FILENO) { //stdin so the user has typed something.
         nbytes = read(STDIN_FILENO, buffer, sizeof(buffer));    
@@ -75,13 +75,18 @@ void handle_event(int server_socket, struct pollfd *pfds, int i) {
             }
         }
     } else { //assuming must be from server. 
-        nbytes = recv(server_socket, buffer, sizeof(buffer), 0);
+        nbytes = recv(server_socket, &to_receive, sizeof(to_receive), 0);
         if (nbytes <= 0) {
             if (nbytes == 0) {
                 printf("lost connection with server RIP.\n");
                 exit(1);
             }
         } else {
+            //should we be checking if to_receive is 0 too? aka a valid message prefix came of agreed length but represents number 0. what does this mean/when could this situation arise? blank msg sent?
+            nbytes = 0;
+            while (nbytes < to_receive) {
+                nbytes += recv(server_socket, buffer + nbytes, sizeof(buffer) - nbytes, 0);
+            }
             printf("%s", buffer); //should this be null terminated? can we assume the server sent something null terminated? aka client 1 sends, is that NT? how does server?
         }
     }
