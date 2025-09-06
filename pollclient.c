@@ -60,11 +60,16 @@ int get_server_socket() {
 void handle_event(int server_socket, struct pollfd *pfds, int i) {
     int offending_fd = pfds[i].fd;
     char buffer[MAX_MESSAGE_SIZE];
-    ssize_t nbytes;
+    uint32_t nbytes;
 
     if (offending_fd == STDIN_FILENO) { //stdin so the user has typed something.
         nbytes = read(STDIN_FILENO, buffer, sizeof(buffer));    
         if (nbytes > 0) {
+            //prefix number of bytes to send.
+            if (send(server_socket, &nbytes, sizeof(nbytes), 0)) {
+                perror("pollclient: send");
+            }
+
             if (send(server_socket, buffer, nbytes, 0) == -1) {
                 perror("pollclient: send");
             }
